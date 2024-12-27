@@ -2,68 +2,20 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from statsmodels.tsa.arima.model import ARIMA
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-def generate_future_periods(last_period, num_periods):
-    """Generate future period labels"""
-    future_periods = []
-    current_year, current_period = map(int, last_period.split('-P'))
-    
-    for i in range(num_periods):
-        next_period = current_period + i + 1
-        year = current_year + (next_period - 1) // 13
-        period = ((next_period - 1) % 13) + 1
-        future_periods.append(f"{year}-P{str(period).zfill(2)}")
-    
-    return future_periods
-
-def forecast_values(data, model_type, periods, params=None):
-    """Generate forecasts using selected model"""
-    values = data.values
-    
-    if model_type == "Simple Moving Average":
-        window = params.get('window_size', 3)
-        ma = pd.Series(values).rolling(window=window).mean()
-        forecast = [ma.iloc[-1]] * periods
-        fitted = ma.values
-        
-    elif model_type == "Exponential Smoothing":
-        model = ExponentialSmoothing(
-            values,
-            seasonal_periods=13,
-            seasonal='add'
-        )
-        fit = model.fit(smoothing_level=params.get('alpha', 0.2))
-        forecast = fit.forecast(periods)
-        fitted = fit.fittedvalues
-        
-    elif model_type == "Holt-Winters":
-        model = ExponentialSmoothing(
-            values,
-            seasonal_periods=13,
-            trend='add',
-            seasonal='add'
-        )
-        fit = model.fit()
-        forecast = fit.forecast(periods)
-        fitted = fit.fittedvalues
-    
-    return fitted, forecast
-
-def calculate_metrics(actual, predicted):
-    """Calculate forecast accuracy metrics"""
-    metrics = {
-        'MAE': mean_absolute_error(actual, predicted),
-        'RMSE': np.sqrt(mean_squared_error(actual, predicted)),
-        'MAPE': np.mean(np.abs((actual - predicted) / actual)) * 100
-    }
-    return metrics
-
-# Main App
 st.set_page_config(page_title="MW Asia Auto Forecasting App", layout="wide")
 st.title("MW Asia Auto Forecasting App")
 
+def forecast_values(series, model_type, periods):
+    """Generate forecasts using selected model"""
+    values = series.values
+    if model_type == "Holt-Winters":
+        model = ExponentialSmoothing(values, seasonal_periods=13, trend='add', seasonal='add')
+        fitted_model = model.fit()
+        forecast = fitted_model.forecast(periods)
+        return forecast
+
+# File upload
 uploaded_file = st.file_uploader("Upload your sales data (Excel/CSV)", type=['csv', 'xlsx', 'xls'])
 
 if uploaded_file is not None:
@@ -74,6 +26,7 @@ if uploaded_file is not None:
         else:
             df = pd.read_excel(uploaded_file)
             
+        # Basic preprocessing
         df['Year'] = df['Year'].astype(int)
         df['Period'] = df['Period'].astype(int)
         df['Year_Period'] = df['Year'].astype(str) + '-P' + df['Period'].astype(str).str.zfill(2)
@@ -110,13 +63,14 @@ if uploaded_file is not None:
             ]
             aggregation_level = st.selectbox('Select View Level', aggregation_options)
 
-        # Filter and create pivot
+        # Filter data
         filtered_df = df[
             (df['Year'].isin(selected_years)) & 
             (df['Period'].isin(selected_periods)) &
             (df['Data_Type'] == selected_data_type)
         ]
 
+        # Create pivot table
         pivot_df = pd.pivot_table(
             filtered_df,
             values='Value',
@@ -125,17 +79,18 @@ if uploaded_file is not None:
             aggfunc='sum',
             fill_value=0
         )
-        
+
+        # Sort columns
         pivot_df = pivot_df.reindex(sorted(pivot_df.columns), axis=1)
 
-        # Forecasting Section
+        # Forecasting Settings
         st.markdown("### Forecasting Settings")
-        f_col1, f_col2, f_col3 = st.columns(3)
+        f_col1, f_col2 = st.columns(2)
         
         with f_col1:
             forecast_model = st.selectbox(
                 "Select Forecasting Model",
-                ["Simple Moving Average", "Exponential Smoothing", "Holt-Winters"]
+                ["Holt-Winters"]
             )
         
         with f_col2:
@@ -145,78 +100,55 @@ if uploaded_file is not None:
                 max_value=26,
                 value=13
             )
-            
-        with f_col3:
-            if forecast_model == "Simple Moving Average":
-                window_size = st.slider("Window Size", 2, 12, 3)
-                model_params = {'window_size': window_size}
-            elif forecast_model == "Exponential Smoothing":
-                alpha = st.slider("Smoothing Factor (α)", 0.0, 1.0, 0.2)
-                model_params = {'alpha': alpha}
-            else:
-                model_params = {}
 
         if st.button("Generate Forecast"):
-            # Generate forecasts for each row
-            last_period = pivot_df.columns[-1]
-            future_period_labels = generate_future_periods(last_period, future_periods)
+            # Initialize future_period_labels list
+            future_period_labels = []
             
-            # Create forecast columns
+            # Generate future period labels
+            last_year, last_period = map(int, pivot_df.columns[-1].split('-P'))
+            for i in range(future_periods):
+                next_period = last_period + i + 1
+                year = last_year + (next_period - 1) // 13
+                period = ((next_period - 1) % 13) + 1
+                future_period_labels.append(f"{year}-P{str(period).zfill(2)}")
+
+            # Generate forecasts for each row
             for idx in pivot_df.index:
                 series = pivot_df.loc[idx]
-                fitted, forecast = forecast_values(
-                    series,
-                    forecast_model,
-                    future_periods,
-                    model_params
-                )
+                forecast = forecast_values(series, forecast_model, future_periods)
                 
                 # Add forecasts to pivot table
                 for i, period in enumerate(future_period_labels):
                     pivot_df.loc[idx, period] = forecast[i]
-                
-                # Calculate metrics for this row
-                metrics = calculate_metrics(
-                    series.values[len(series)-len(fitted):],
-                    fitted
-                )
-                
-                # Store metrics (optional)
-                if 'metrics' not in st.session_state:
-                    st.session_state.metrics = {}
-                st.session_state.metrics[idx] = metrics
 
-        # Add total and sort
+        # Add total column and sort
         pivot_df['Total'] = pivot_df.sum(axis=1)
         pivot_df = pivot_df.sort_values('Total', ascending=False)
 
-        # Display the main table
+        # Display the pivot table
         st.markdown("### Forecast Data Table")
         st.markdown(f"**Showing data for {selected_data_type} aggregated by {aggregation_level}**")
         
-        # Style the table to highlight forecasts
-        def highlight_forecasts(x):
-            if x.name in future_period_labels:
-                return ['background-color: #ffe6e6'] * len(x)
-            return [''] * len(x)
-        
-        styled_df = pivot_df.style\
-            .format("{:,.0f}")\
-            .apply(highlight_forecasts)
-        
-        st.dataframe(styled_df, use_container_width=True)
-
-        # Display metrics if available
-        if 'metrics' in st.session_state:
-            st.markdown("### Forecast Performance Metrics")
-            metrics_df = pd.DataFrame.from_dict(
-                st.session_state.metrics,
-                orient='index'
-            )
-            st.dataframe(
-                metrics_df.style.format("{:.2f}"),
-                use_container_width=True
-            )
+        # Format and display the table
+        try:
+            # Only apply highlighting if forecasting has been done
+            if 'future_period_labels' in locals():
+                def highlight_forecasts(x):
+                    if x.name in future_period_labels:
+                        return ['background-color: #ffe6e6'] * len(x)
+                    return [''] * len(x)
+                
+                styled_df = pivot_df.style\
+                    .format("{:,.0f}")\
+                    .apply(highlight_forecasts)
+            else:
+                styled_df = pivot_df.style.format("{:,.0f}")
+            
+            st.dataframe(styled_df, use_container_width=True)
+            
+        except Exception as e:
+            st.dataframe(pivot_df.style.format("{:,.0f}"), use_container_width=True)
 
     except Exception as e:
         st.error(f"Error processing data: {str(e)}")
