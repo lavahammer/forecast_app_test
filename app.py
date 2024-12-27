@@ -43,14 +43,12 @@ def load_data(file):
     return df
 
 def main():
-    # Title with custom styling
     st.markdown("""
         <div class='title-container'>
             <h1 style='text-align: center; color: #1f77b4;'>MW Asia Auto Forecasting App</h1>
         </div>
     """, unsafe_allow_html=True)
 
-    # File upload with better styling
     uploaded_file = st.file_uploader(
         "Upload your sales data (Excel/CSV)",
         type=['csv', 'xlsx', 'xls'],
@@ -86,15 +84,11 @@ def main():
         
         with col3:
             st.markdown("### Data Type Selection")
-            data_type_options = [
-                'Value',
-                'SKU Description',
-                'GRD code'
-            ]
+            data_types = sorted(df['Data_Type'].unique())
             selected_data_type = st.selectbox(
                 'Select Data Type',
-                data_type_options,
-                help="Choose which data to display"
+                data_types,
+                help="Choose which data type to display"
             )
             
         with col4:
@@ -118,53 +112,35 @@ def main():
         # Filter data
         filtered_df = df[
             (df['Year'].isin(selected_years)) & 
-            (df['Period'].isin(selected_periods))
+            (df['Period'].isin(selected_periods)) &
+            (df['Data_Type'] == selected_data_type)
         ]
 
-        # Create pivot table based on selected data type
-        if selected_data_type == 'Value':
-            pivot_df = pd.pivot_table(
-                filtered_df,
-                values='Value',
-                index=aggregation_level,
-                columns='Year_Period',
-                aggfunc='sum',
-                fill_value=0
-            )
-            # Format as numbers
-            format_dict = {col: '{:,.0f}' for col in pivot_df.columns}
-        else:
-            # For non-numeric data types, use first value
-            pivot_df = pd.pivot_table(
-                filtered_df,
-                values=selected_data_type,
-                index=aggregation_level,
-                columns='Year_Period',
-                aggfunc='first',
-                fill_value=''
-            )
-            # No numeric formatting for text data
-            format_dict = {}
+        # Create pivot table
+        pivot_df = pd.pivot_table(
+            filtered_df,
+            values='Value',
+            index=aggregation_level,
+            columns='Year_Period',
+            aggfunc='sum',
+            fill_value=0
+        )
 
         # Sort columns by Year-Period
         pivot_df = pivot_df.reindex(sorted(pivot_df.columns), axis=1)
 
-        # Add total column for numeric data
-        if selected_data_type == 'Value':
-            pivot_df['Total'] = pivot_df.sum(axis=1)
-            pivot_df = pivot_df.sort_values('Total', ascending=False)
-            format_dict['Total'] = '{:,.0f}'
+        # Add total column
+        pivot_df['Total'] = pivot_df.sum(axis=1)
+        pivot_df = pivot_df.sort_values('Total', ascending=False)
 
         # Display the pivot table
         st.markdown("### Forecast Data Table")
-        st.markdown(f"**Showing {selected_data_type} aggregated by {aggregation_level}**")
+        st.markdown(f"**Showing data for {selected_data_type} aggregated by {aggregation_level}**")
         
-        # Format and display the table
-        if format_dict:
-            formatted_df = pivot_df.style.format(format_dict)
-        else:
-            formatted_df = pivot_df
+        # Format the numbers in the dataframe
+        formatted_df = pivot_df.style.format("{:,.0f}")
         
+        # Display the formatted table
         st.dataframe(formatted_df, use_container_width=True)
 
         # Export options
@@ -191,19 +167,18 @@ def main():
                     mime="text/csv"
                 )
 
-        # Additional Statistics (only for Value data type)
-        if selected_data_type == 'Value':
-            st.markdown("### Summary Statistics")
-            stats_df = pd.DataFrame({
-                'Total Value': pivot_df['Total'],
-                'Average per Period': pivot_df.iloc[:, :-1].mean(axis=1),
-                'Number of Periods': pivot_df.iloc[:, :-1].count(axis=1)
-            })
-            
-            st.dataframe(stats_df.style.format({
-                'Total Value': '{:,.0f}',
-                'Average per Period': '{:,.0f}'
-            }))
+        # Summary Statistics
+        st.markdown("### Summary Statistics")
+        stats_df = pd.DataFrame({
+            'Total Value': pivot_df['Total'],
+            'Average per Period': pivot_df.iloc[:, :-1].mean(axis=1),
+            'Number of Periods': pivot_df.iloc[:, :-1].count(axis=1)
+        })
+        
+        st.dataframe(stats_df.style.format({
+            'Total Value': '{:,.0f}',
+            'Average per Period': '{:,.0f}'
+        }))
 
 if __name__ == "__main__":
     main()
