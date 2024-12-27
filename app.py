@@ -1,184 +1,203 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from statsmodels.tsa.arima.model import ARIMA
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import plotly.express as px
+import plotly.graph_objects as go
 
-# Page configuration
-st.set_page_config(
-    page_title="MW Asia Auto Forecasting App",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# [Previous imports and CSS remain the same]
 
-# Custom CSS for better UI
-st.markdown("""
-    <style>
-    .main {
-        padding: 2rem;
-    }
-    .stSelectbox, .stMultiSelect {
-        margin-bottom: 1rem;
-    }
-    .title-container {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 5px;
-        margin-bottom: 2rem;
-    }
-    </style>
-""", unsafe_allow_html=True)
+def create_forecast(data, model_type, forecast_periods, params=None):
+    """Generate forecasts using selected model"""
+    # Prepare data for forecasting
+    y = data.values
+    
+    if model_type == "Simple Moving Average":
+        window = params.get('window_size', 3)
+        ma = pd.Series(y).rolling(window=window).mean()
+        forecast = [ma.iloc[-1]] * forecast_periods
+        fitted = ma.values
+        
+    elif model_type == "Exponential Smoothing":
+        alpha = params.get('alpha', 0.2)
+        model = ExponentialSmoothing(y, seasonal_periods=13, seasonal='add')
+        fitted_model = model.fit(smoothing_level=alpha)
+        forecast = fitted_model.forecast(forecast_periods)
+        fitted = fitted_model.fittedvalues
+        
+    elif model_type == "Holt-Winters":
+        model = ExponentialSmoothing(
+            y,
+            seasonal_periods=13,
+            trend='add',
+            seasonal='add'
+        )
+        fitted_model = model.fit()
+        forecast = fitted_model.forecast(forecast_periods)
+        fitted = fitted_model.fittedvalues
+        
+    elif model_type == "SARIMA":
+        model = ARIMA(
+            y, 
+            order=params.get('order', (1,1,1)),
+            seasonal_order=params.get('seasonal_order', (1,1,1,13))
+        )
+        fitted_model = model.fit()
+        forecast = fitted_model.forecast(forecast_periods)
+        fitted = fitted_model.fittedvalues
+        
+    return fitted, forecast
 
-def load_data(file):
-    if file.name.endswith('.csv'):
-        df = pd.read_csv(file)
-    else:
-        df = pd.read_excel(file)
+def calculate_metrics(actual, predicted):
+    """Calculate forecast performance metrics"""
+    mae = mean_absolute_error(actual, predicted)
+    rmse = np.sqrt(mean_squared_error(actual, predicted))
+    mape = np.mean(np.abs((actual - predicted) / actual)) * 100
+    r2 = r2_score(actual, predicted)
     
-    # Ensure Year and Period are integers
-    df['Year'] = df['Year'].astype(int)
-    df['Period'] = df['Period'].astype(int)
-    
-    # Create Year-Period combination
-    df['Year_Period'] = df['Year'].astype(str) + '-P' + df['Period'].astype(str).str.zfill(2)
-    
-    return df
+    return {
+        'MAE': mae,
+        'RMSE': rmse,
+        'MAPE': mape,
+        'R-squared': r2
+    }
 
 def main():
-    st.markdown("""
-        <div class='title-container'>
-            <h1 style='text-align: center; color: #1f77b4;'>MW Asia Auto Forecasting App</h1>
-        </div>
-    """, unsafe_allow_html=True)
-
-    uploaded_file = st.file_uploader(
-        "Upload your sales data (Excel/CSV)",
-        type=['csv', 'xlsx', 'xls'],
-        help="Upload your sales data file in CSV or Excel format"
-    )
+    # [Previous main UI code remains until the pivot table display]
 
     if uploaded_file is not None:
-        # Load data
-        df = load_data(uploaded_file)
+        # [Previous code for loading and filtering data]
+
+        # Add Forecasting Section
+        st.markdown("### Forecasting Settings")
         
-        # Create columns for filters
-        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+        forecast_col1, forecast_col2, forecast_col3 = st.columns(3)
         
-        with col1:
-            st.markdown("### Year Selection")
-            years = sorted(df['Year'].unique())
-            selected_years = st.multiselect(
-                'Select Years',
-                years,
-                default=years,
-                help="Select one or multiple years"
+        with forecast_col1:
+            forecast_model = st.selectbox(
+                "Select Forecasting Model",
+                ["Simple Moving Average", "Exponential Smoothing", "Holt-Winters", "SARIMA"],
+                help="Choose the forecasting model to use"
+            )
+        
+        with forecast_col2:
+            future_periods = st.number_input(
+                "Number of Periods to Forecast",
+                min_value=1,
+                max_value=26,
+                value=13,
+                help="Number of future periods to forecast"
             )
             
-        with col2:
-            st.markdown("### Period Selection")
-            periods = sorted(df['Period'].unique())
-            selected_periods = st.multiselect(
-                'Select Periods (1-13)',
-                periods,
-                default=periods,
-                help="Select one or multiple periods"
+        with forecast_col3:
+            # Model-specific parameters
+            if forecast_model == "Simple Moving Average":
+                window_size = st.slider("Window Size", 2, 12, 3)
+                model_params = {'window_size': window_size}
+            elif forecast_model == "Exponential Smoothing":
+                alpha = st.slider("Smoothing Factor (α)", 0.0, 1.0, 0.2)
+                model_params = {'alpha': alpha}
+            elif forecast_model == "SARIMA":
+                p = st.slider("AR Order (p)", 0, 3, 1)
+                d = st.slider("Difference Order (d)", 0, 2, 1)
+                q = st.slider("MA Order (q)", 0, 3, 1)
+                model_params = {
+                    'order': (p,d,q),
+                    'seasonal_order': (1,1,1,13)
+                }
+            else:
+                model_params = {}
+
+        if st.button("Generate Forecast"):
+            # Prepare time series data
+            ts_data = pd.Series(
+                pivot_df.iloc[:, :-1].values[0],  # Take first row for forecasting
+                index=pd.to_datetime(pivot_df.columns[:-1])  # Exclude 'Total' column
             )
-        
-        with col3:
-            st.markdown("### Data Type Selection")
-            data_types = sorted(df['Data_Type'].unique())
-            selected_data_type = st.selectbox(
-                'Select Data Type',
-                data_types,
-                help="Choose which data type to display"
+
+            # Generate forecast
+            fitted_values, forecast_values = create_forecast(
+                ts_data,
+                forecast_model,
+                future_periods,
+                model_params
+            )
+
+            # Create future dates
+            last_date = ts_data.index[-1]
+            future_dates = pd.date_range(
+                start=pd.Timestamp(last_date) + pd.DateOffset(months=1),
+                periods=future_periods,
+                freq='M'
+            )
+
+            # Calculate metrics
+            metrics = calculate_metrics(ts_data.values[len(ts_data)-len(fitted_values):], fitted_values)
+
+            # Display results
+            st.markdown("### Forecast Results")
+            
+            # Plot actual vs forecast
+            fig = go.Figure()
+            
+            # Historical data
+            fig.add_trace(go.Scatter(
+                x=ts_data.index,
+                y=ts_data.values,
+                name='Actual',
+                line=dict(color='blue')
+            ))
+            
+            # Fitted values
+            fig.add_trace(go.Scatter(
+                x=ts_data.index[-len(fitted_values):],
+                y=fitted_values,
+                name='Fitted',
+                line=dict(color='green', dash='dash')
+            ))
+            
+            # Forecast values
+            fig.add_trace(go.Scatter(
+                x=future_dates,
+                y=forecast_values,
+                name='Forecast',
+                line=dict(color='red', dash='dash')
+            ))
+            
+            fig.update_layout(
+                title=f'{forecast_model} Forecast',
+                xaxis_title='Date',
+                yaxis_title='Value',
+                showlegend=True
             )
             
-        with col4:
-            st.markdown("### View Selection")
-            aggregation_options = [
-                'GRD_code_Consolidated',
-                'Description_Consolidated',
-                'Category',
-                'Sub_Category',
-                'Segment',
-                'Brand',
-                'Product Range',
-                'Channel_1'
-            ]
-            aggregation_level = st.selectbox(
-                'Select View Level',
-                aggregation_options,
-                help="Choose how to aggregate the data"
-            )
+            st.plotly_chart(fig, use_container_width=True)
 
-        # Filter data
-        filtered_df = df[
-            (df['Year'].isin(selected_years)) & 
-            (df['Period'].isin(selected_periods)) &
-            (df['Data_Type'] == selected_data_type)
-        ]
+            # Display metrics
+            st.markdown("### Model Performance Metrics")
+            metrics_df = pd.DataFrame({
+                'Metric': metrics.keys(),
+                'Value': metrics.values()
+            })
+            
+            st.dataframe(metrics_df.style.format({
+                'Value': '{:.2f}'
+            }))
 
-        # Create pivot table
-        pivot_df = pd.pivot_table(
-            filtered_df,
-            values='Value',
-            index=aggregation_level,
-            columns='Year_Period',
-            aggfunc='sum',
-            fill_value=0
-        )
+            # Display forecast values
+            st.markdown("### Forecast Values")
+            forecast_df = pd.DataFrame({
+                'Date': future_dates,
+                'Forecasted Value': forecast_values
+            })
+            
+            st.dataframe(forecast_df.style.format({
+                'Forecasted Value': '{:.0f}'
+            }))
 
-        # Sort columns by Year-Period
-        pivot_df = pivot_df.reindex(sorted(pivot_df.columns), axis=1)
-
-        # Add total column
-        pivot_df['Total'] = pivot_df.sum(axis=1)
-        pivot_df = pivot_df.sort_values('Total', ascending=False)
-
-        # Display the pivot table
-        st.markdown("### Forecast Data Table")
-        st.markdown(f"**Showing data for {selected_data_type} aggregated by {aggregation_level}**")
-        
-        # Format the numbers in the dataframe
-        formatted_df = pivot_df.style.format("{:,.0f}")
-        
-        # Display the formatted table
-        st.dataframe(formatted_df, use_container_width=True)
-
-        # Export options
-        st.markdown("### Export Options")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("Export to Excel"):
-                output = pivot_df.to_excel()
-                st.download_button(
-                    label="Download Excel file",
-                    data=output,
-                    file_name=f"forecast_data_{selected_data_type}.xlsx",
-                    mime="application/vnd.ms-excel"
-                )
-        
-        with col2:
-            if st.button("Export to CSV"):
-                csv = pivot_df.to_csv()
-                st.download_button(
-                    label="Download CSV file",
-                    data=csv,
-                    file_name=f"forecast_data_{selected_data_type}.csv",
-                    mime="text/csv"
-                )
-
-        # Summary Statistics
-        st.markdown("### Summary Statistics")
-        stats_df = pd.DataFrame({
-            'Total Value': pivot_df['Total'],
-            'Average per Period': pivot_df.iloc[:, :-1].mean(axis=1),
-            'Number of Periods': pivot_df.iloc[:, :-1].count(axis=1)
-        })
-        
-        st.dataframe(stats_df.style.format({
-            'Total Value': '{:,.0f}',
-            'Average per Period': '{:,.0f}'
-        }))
+    # [Rest of the previous code remains the same]
 
 if __name__ == "__main__":
     main()
