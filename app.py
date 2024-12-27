@@ -61,8 +61,8 @@ def main():
         # Load data
         df = load_data(uploaded_file)
         
-        # Create two columns for filters
-        col1, col2, col3 = st.columns([1, 1, 2])
+        # Create columns for filters
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
         
         with col1:
             st.markdown("### Year Selection")
@@ -83,8 +83,21 @@ def main():
                 default=periods,
                 help="Select one or multiple periods"
             )
-            
+        
         with col3:
+            st.markdown("### Data Type Selection")
+            data_type_options = [
+                'Value',
+                'SKU Description',
+                'GRD code'
+            ]
+            selected_data_type = st.selectbox(
+                'Select Data Type',
+                data_type_options,
+                help="Choose which data to display"
+            )
+            
+        with col4:
             st.markdown("### View Selection")
             aggregation_options = [
                 'GRD_code_Consolidated',
@@ -108,33 +121,50 @@ def main():
             (df['Period'].isin(selected_periods))
         ]
 
-        # Create pivot table
-        pivot_df = pd.pivot_table(
-            filtered_df,
-            values='Value',
-            index=aggregation_level,
-            columns='Year_Period',
-            aggfunc='sum',
-            fill_value=0
-        )
+        # Create pivot table based on selected data type
+        if selected_data_type == 'Value':
+            pivot_df = pd.pivot_table(
+                filtered_df,
+                values='Value',
+                index=aggregation_level,
+                columns='Year_Period',
+                aggfunc='sum',
+                fill_value=0
+            )
+            # Format as numbers
+            format_dict = {col: '{:,.0f}' for col in pivot_df.columns}
+        else:
+            # For non-numeric data types, use first value
+            pivot_df = pd.pivot_table(
+                filtered_df,
+                values=selected_data_type,
+                index=aggregation_level,
+                columns='Year_Period',
+                aggfunc='first',
+                fill_value=''
+            )
+            # No numeric formatting for text data
+            format_dict = {}
 
         # Sort columns by Year-Period
         pivot_df = pivot_df.reindex(sorted(pivot_df.columns), axis=1)
 
-        # Add total column
-        pivot_df['Total'] = pivot_df.sum(axis=1)
-        
-        # Sort by total descending
-        pivot_df = pivot_df.sort_values('Total', ascending=False)
+        # Add total column for numeric data
+        if selected_data_type == 'Value':
+            pivot_df['Total'] = pivot_df.sum(axis=1)
+            pivot_df = pivot_df.sort_values('Total', ascending=False)
+            format_dict['Total'] = '{:,.0f}'
 
         # Display the pivot table
         st.markdown("### Forecast Data Table")
-        st.markdown(f"**Showing data aggregated by {aggregation_level}**")
+        st.markdown(f"**Showing {selected_data_type} aggregated by {aggregation_level}**")
         
-        # Format the numbers in the dataframe
-        formatted_df = pivot_df.style.format("{:,.0f}")
+        # Format and display the table
+        if format_dict:
+            formatted_df = pivot_df.style.format(format_dict)
+        else:
+            formatted_df = pivot_df
         
-        # Display the formatted table
         st.dataframe(formatted_df, use_container_width=True)
 
         # Export options
@@ -143,38 +173,37 @@ def main():
         
         with col1:
             if st.button("Export to Excel"):
-                # Convert to Excel
                 output = pivot_df.to_excel()
                 st.download_button(
                     label="Download Excel file",
                     data=output,
-                    file_name="forecast_data.xlsx",
+                    file_name=f"forecast_data_{selected_data_type}.xlsx",
                     mime="application/vnd.ms-excel"
                 )
         
         with col2:
             if st.button("Export to CSV"):
-                # Convert to CSV
                 csv = pivot_df.to_csv()
                 st.download_button(
                     label="Download CSV file",
                     data=csv,
-                    file_name="forecast_data.csv",
+                    file_name=f"forecast_data_{selected_data_type}.csv",
                     mime="text/csv"
                 )
 
-        # Additional Statistics
-        st.markdown("### Summary Statistics")
-        stats_df = pd.DataFrame({
-            'Total Value': pivot_df['Total'],
-            'Average per Period': pivot_df.iloc[:, :-1].mean(axis=1),
-            'Number of Periods': pivot_df.iloc[:, :-1].count(axis=1)
-        })
-        
-        st.dataframe(stats_df.style.format({
-            'Total Value': '{:,.0f}',
-            'Average per Period': '{:,.0f}'
-        }))
+        # Additional Statistics (only for Value data type)
+        if selected_data_type == 'Value':
+            st.markdown("### Summary Statistics")
+            stats_df = pd.DataFrame({
+                'Total Value': pivot_df['Total'],
+                'Average per Period': pivot_df.iloc[:, :-1].mean(axis=1),
+                'Number of Periods': pivot_df.iloc[:, :-1].count(axis=1)
+            })
+            
+            st.dataframe(stats_df.style.format({
+                'Total Value': '{:,.0f}',
+                'Average per Period': '{:,.0f}'
+            }))
 
 if __name__ == "__main__":
     main()
