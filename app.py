@@ -4,7 +4,7 @@ import numpy as np
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import warnings
 
-# Suppress statsmodels warnings
+# Suppress warnings
 warnings.filterwarnings('ignore')
 
 # Page configuration
@@ -15,91 +15,96 @@ st.markdown("""
     <h1 style='text-align: center; color: #0000A0;'>MW Asia Auto Forecasting App</h1>
     """, unsafe_allow_html=True)
 
+def generate_fallback_forecast(historical_values, periods):
+    """Generate a simple forecast based on historical average"""
+    recent_values = historical_values[-min(13, len(historical_values)):]
+    non_zero_values = recent_values[recent_values > 0]
+    if len(non_zero_values) > 0:
+        baseline = non_zero_values.mean()
+    else:
+        baseline = recent_values.mean() if len(recent_values) > 0 else 1
+    return np.array([baseline] * periods)
+
 def calculate_sma_forecast(series, window_size, periods):
-    """
-    Simple Moving Average forecast
-    - Window Size: Number of periods to average (larger window = smoother forecast)
-    - Best for stable data with minimal trend/seasonality
-    """
+    """Calculate Simple Moving Average forecast"""
     if 'Total' in series:
         series = series.drop('Total')
-        
+    
     values = series.values
-    non_zero_values = values[values != 0]
+    values = np.where(values == 0, np.nan, values)
+    values = pd.Series(values).fillna(method='ffill').fillna(method='bfill').values
     
-    if len(non_zero_values) >= window_size:
-        ma = pd.Series(values).rolling(window=window_size).mean()
-        forecast_value = ma.dropna().iloc[-1]
-    else:
-        forecast_value = non_zero_values.mean() if len(non_zero_values) > 0 else values.mean()
-    
-    return np.array([forecast_value] * periods)
+    try:
+        if len(values) >= window_size:
+            ma = pd.Series(values).rolling(window=window_size).mean()
+            forecast_value = ma.dropna().iloc[-1]
+            return np.array([forecast_value] * periods)
+        else:
+            return generate_fallback_forecast(values, periods)
+    except Exception as e:
+        st.warning(f"Using fallback forecast method: {str(e)}")
+        return generate_fallback_forecast(values, periods)
 
 def calculate_ema_forecast(series, alpha, periods):
-    """
-    Exponential Moving Average forecast
-    - Alpha (α): Smoothing factor between 0 and 1
-        - Higher α (closer to 1) = More weight to recent data
-        - Lower α (closer to 0) = More weight to historical data
-    - Best for data with gradual trends
-    """
+    """Calculate Exponential Smoothing forecast"""
     if 'Total' in series:
         series = series.drop('Total')
-        
-    values = series.values
-    non_zero_values = values[values != 0]
     
-    if len(non_zero_values) >= 13:
-        try:
+    values = series.values
+    values = np.where(values == 0, np.nan, values)
+    values = pd.Series(values).fillna(method='ffill').fillna(method='bfill').values
+    
+    try:
+        if len(values) >= 13:
             model = ExponentialSmoothing(
                 values,
-                seasonal_periods=13
+                seasonal_periods=13,
+                initialization_method='heuristic'
             )
             fitted = model.fit(
                 smoothing_level=alpha,
-                optimized=False
+                optimized=False,
+                remove_bias=True
             )
             forecast = fitted.forecast(periods)
+            forecast = np.maximum(forecast, values.mean() * 0.1)
             return forecast
-        except Exception as e:
-            return np.array([non_zero_values.mean()] * periods)
-    else:
-        return np.array([non_zero_values.mean() if len(non_zero_values) > 0 else values.mean()] * periods)
+        else:
+            return generate_fallback_forecast(values, periods)
+    except Exception as e:
+        st.warning(f"Using fallback forecast method: {str(e)}")
+        return generate_fallback_forecast(values, periods)
 
 def calculate_holtwinters_forecast(series, periods):
-    """
-    Holt-Winters forecast with Triple Exponential Smoothing
-    - Automatically optimizes three components:
-        1. Level (α): Base value smoothing
-        2. Trend (β): Trend component smoothing
-        3. Seasonal (γ): Seasonal pattern smoothing
-    - Best for data with both trend and seasonality
-    - Uses 13-period seasonality for this application
-    """
+    """Calculate Holt-Winters forecast"""
     if 'Total' in series:
         series = series.drop('Total')
     
     values = series.values
-    non_zero_values = values[values != 0]
+    values = np.where(values == 0, np.nan, values)
+    values = pd.Series(values).fillna(method='ffill').fillna(method='bfill').values
     
-    if len(non_zero_values) >= 2 * 13:
-        try:
+    try:
+        if len(values) >= 26:
             model = ExponentialSmoothing(
                 values,
                 seasonal_periods=13,
                 trend='add',
-                seasonal='add'
+                seasonal='add',
+                initialization_method='heuristic'
             )
             fitted = model.fit(
                 optimized=True,
-                method='L-BFGS-B'
+                remove_bias=True
             )
             forecast = fitted.forecast(periods)
+            forecast = np.maximum(forecast, values.mean() * 0.1)
             return forecast
-        except Exception as e:
-            return np.array([non_zero_values.mean()] * periods)
-    else:
-        return np.array([non_zero_values.mean() if len(non_zero_values) > 0 else values.mean()] * periods)
+        else:
+            return generate_fallback_forecast(values, periods)
+    except Exception as e:
+        st.warning(f"Using fallback forecast method: {str(e)}")
+        return generate_fallback_forecast(values, periods)
 
 # File upload
 uploaded_file = st.file_uploader("Upload your sales data (Excel/CSV)", type=['csv', 'xlsx', 'xls'])
