@@ -6,14 +6,43 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 st.set_page_config(page_title="MW Asia Auto Forecasting App", layout="wide")
 st.title("MW Asia Auto Forecasting App")
 
-def forecast_values(series, model_type, periods):
-    """Generate forecasts using selected model"""
+def calculate_sma_forecast(series, window_size, periods):
+    """Calculate Simple Moving Average forecast"""
     values = series.values
-    if model_type == "Holt-Winters":
-        model = ExponentialSmoothing(values, seasonal_periods=13, trend='add', seasonal='add')
-        fitted_model = model.fit()
-        forecast = fitted_model.forecast(periods)
-        return forecast
+    ma = pd.Series(values).rolling(window=window_size).mean()
+    # Use the last valid MA value for forecast
+    forecast_value = ma.dropna().iloc[-1]
+    return np.array([forecast_value] * periods)
+
+def calculate_ema_forecast(series, alpha, periods):
+    """Calculate Exponential Moving Average forecast"""
+    values = series.values
+    model = ExponentialSmoothing(values, seasonal_periods=13)
+    fitted = model.fit(smoothing_level=alpha)
+    forecast = fitted.forecast(periods)
+    return forecast
+
+def calculate_holtwinters_forecast(series, periods):
+    """Calculate Holt-Winters forecast"""
+    values = series.values
+    model = ExponentialSmoothing(
+        values,
+        seasonal_periods=13,
+        trend='add',
+        seasonal='add'
+    )
+    fitted = model.fit(optimized=True)
+    forecast = fitted.forecast(periods)
+    return forecast
+
+def forecast_values(series, model_type, periods, params=None):
+    """Generate forecasts using selected model"""
+    if model_type == "Simple Moving Average":
+        return calculate_sma_forecast(series, params.get('window_size', 3), periods)
+    elif model_type == "Exponential Smoothing":
+        return calculate_ema_forecast(series, params.get('alpha', 0.2), periods)
+    elif model_type == "Holt-Winters":
+        return calculate_holtwinters_forecast(series, periods)
 
 # File upload
 uploaded_file = st.file_uploader("Upload your sales data (Excel/CSV)", type=['csv', 'xlsx', 'xls'])
@@ -85,12 +114,12 @@ if uploaded_file is not None:
 
         # Forecasting Settings
         st.markdown("### Forecasting Settings")
-        f_col1, f_col2 = st.columns(2)
+        f_col1, f_col2, f_col3 = st.columns(3)
         
         with f_col1:
             forecast_model = st.selectbox(
                 "Select Forecasting Model",
-                ["Holt-Winters"]
+                ["Simple Moving Average", "Exponential Smoothing", "Holt-Winters"]
             )
         
         with f_col2:
@@ -100,6 +129,16 @@ if uploaded_file is not None:
                 max_value=26,
                 value=13
             )
+            
+        with f_col3:
+            # Model-specific parameters
+            model_params = {}
+            if forecast_model == "Simple Moving Average":
+                window_size = st.slider("Window Size", 2, 12, 3)
+                model_params['window_size'] = window_size
+            elif forecast_model == "Exponential Smoothing":
+                alpha = st.slider("Smoothing Factor (α)", 0.0, 1.0, 0.2)
+                model_params['alpha'] = alpha
 
         if st.button("Generate Forecast"):
             # Initialize future_period_labels list
@@ -116,11 +155,13 @@ if uploaded_file is not None:
             # Generate forecasts for each row
             for idx in pivot_df.index:
                 series = pivot_df.loc[idx]
-                forecast = forecast_values(series, forecast_model, future_periods)
-                
-                # Add forecasts to pivot table
-                for i, period in enumerate(future_period_labels):
-                    pivot_df.loc[idx, period] = forecast[i]
+                try:
+                    forecast = forecast_values(series, forecast_model, future_periods, model_params)
+                    # Add forecasts to pivot table
+                    for i, period in enumerate(future_period_labels):
+                        pivot_df.loc[idx, period] = forecast[i]
+                except Exception as e:
+                    st.warning(f"Could not generate forecast for {idx}: {str(e)}")
 
         # Add total column and sort
         pivot_df['Total'] = pivot_df.sum(axis=1)
